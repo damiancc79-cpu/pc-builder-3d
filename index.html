@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RIGFORGE — 3D PC Builder Simulator</title>
+<style>
+  :root{
+    --bg:#070a0f;
+    --panel:rgba(16,21,30,.86);
+    --panel-solid:#101520;
+    --line:rgba(120,160,200,.16);
+    --line-hot:rgba(56,232,255,.45);
+    --txt:#d8e4f0;
+    --dim:#7d8fa5;
+    --cyan:#38e8ff;
+    --mag:#ff4d9d;
+    --lime:#8bff6a;
+    --amber:#ffc247;
+    --red:#ff5a5a;
+    --font:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden}
+  body{
+    background:var(--bg);color:var(--txt);font-family:var(--font);
+    font-size:13px;-webkit-font-smoothing:antialiased;user-select:none;
+  }
+  /* #app is painted above the fixed canvas, so it must not swallow pointer
+     events over the 3D view — only the actual chrome opts back in. */
+  #app{position:fixed;inset:0;display:grid;pointer-events:none;
+    grid-template-columns:300px 1fr 290px;
+    grid-template-rows:52px 1fr;
+    grid-template-areas:"top top top" "shop stage build";}
+  #topbar,#shop,#buildp,#rshop,#rbench{pointer-events:auto}
+  /* width/height are required: without them the canvas lays out at its
+     intrinsic drawing-buffer size (viewport × devicePixelRatio) and overflows */
+  canvas#gl{position:fixed;inset:0;width:100%;height:100%;z-index:0;display:block}
+
+  /* ---------- top bar ---------- */
+  #topbar{grid-area:top;z-index:20;display:flex;align-items:center;gap:14px;
+    padding:0 14px;background:linear-gradient(180deg,rgba(8,12,18,.97),rgba(8,12,18,.78));
+    border-bottom:1px solid var(--line);backdrop-filter:blur(14px)}
+  .logo{font-weight:800;letter-spacing:.16em;font-size:14px;
+    background:linear-gradient(90deg,var(--cyan),var(--mag));-webkit-background-clip:text;
+    background-clip:text;color:transparent;white-space:nowrap}
+  .logo small{display:block;font-size:8px;letter-spacing:.22em;color:var(--dim);
+    -webkit-text-fill-color:var(--dim);font-weight:600}
+  .chip{display:flex;flex-direction:column;gap:1px;padding:4px 11px;border-radius:7px;
+    background:rgba(255,255,255,.035);border:1px solid var(--line);min-width:78px}
+  .chip b{font-family:var(--mono);font-size:14px;line-height:1.1}
+  .chip span{font-size:8.5px;letter-spacing:.13em;color:var(--dim);text-transform:uppercase}
+  .chip.ok b{color:var(--lime)} .chip.bad b{color:var(--red)}
+
+  #steps{display:flex;gap:5px;margin-left:auto;align-items:center;flex-wrap:nowrap;overflow:hidden}
+  .step{font-size:9px;letter-spacing:.08em;text-transform:uppercase;padding:4px 8px;border-radius:20px;
+    border:1px solid var(--line);color:var(--dim);white-space:nowrap;transition:.25s}
+  .step.done{color:var(--lime);border-color:rgba(139,255,106,.35);background:rgba(139,255,106,.07)}
+  .step.now{color:var(--cyan);border-color:var(--line-hot);background:rgba(56,232,255,.1);
+    box-shadow:0 0 14px rgba(56,232,255,.16)}
+
+  button{font-family:var(--font);cursor:pointer;border:none;background:none;color:inherit}
+  .btn{padding:7px 13px;border-radius:7px;border:1px solid var(--line);font-size:11px;font-weight:600;
+    letter-spacing:.05em;background:rgba(255,255,255,.04);transition:.16s;white-space:nowrap}
+  .btn:hover{background:rgba(255,255,255,.1);border-color:var(--line-hot)}
+  .btn.primary{background:linear-gradient(135deg,var(--cyan),#2aa8ff);color:#04121a;border-color:transparent}
+  .btn.primary:hover{filter:brightness(1.12)}
+  .btn.primary:disabled{background:rgba(255,255,255,.05);color:var(--dim);cursor:not-allowed;filter:none;
+    border:1px solid var(--line)}
+  .btn.ghost{background:none}
+
+  /* ---------- side panels ---------- */
+  .panel{z-index:15;background:var(--panel);backdrop-filter:blur(16px);
+    display:flex;flex-direction:column;overflow:hidden}
+  #shop{grid-area:shop;border-right:1px solid var(--line)}
+  #buildp{grid-area:build;border-left:1px solid var(--line)}
+  .phead{padding:11px 13px 9px;border-bottom:1px solid var(--line);display:flex;
+    align-items:center;justify-content:space-between;gap:8px;flex:none}
+  .phead h2{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);font-weight:700}
+
+  #tabs{display:flex;flex-wrap:wrap;gap:4px;padding:9px 10px;border-bottom:1px solid var(--line);flex:none}
+  .tab{font-size:10px;padding:4px 8px;border-radius:5px;border:1px solid transparent;
+    color:var(--dim);transition:.15s;position:relative}
+  .tab:hover{color:var(--txt);background:rgba(255,255,255,.05)}
+  .tab.active{color:#04121a;background:var(--cyan);font-weight:700}
+  .tab .dot{position:absolute;top:2px;right:3px;width:5px;height:5px;border-radius:50%;background:var(--lime)}
+  .tab.active .dot{background:#04121a}
+
+  .scroll{overflow-y:auto;overflow-x:hidden;flex:1;scrollbar-width:thin;
+    scrollbar-color:rgba(120,160,200,.28) transparent}
+  .scroll::-webkit-scrollbar{width:7px}
+  .scroll::-webkit-scrollbar-thumb{background:rgba(120,160,200,.26);border-radius:4px}
+  .scroll::-webkit-scrollbar-track{background:transparent}
+
+  .card{margin:7px 9px;padding:9px 10px;border-radius:8px;border:1px solid var(--line);
+    background:rgba(255,255,255,.028);transition:.15s;cursor:pointer;position:relative;overflow:hidden}
+  .card:hover{border-color:var(--line-hot);background:rgba(56,232,255,.06)}
+  .card.owned{border-color:rgba(139,255,106,.4);background:rgba(139,255,106,.05)}
+  .card.bad{opacity:.5}
+  .card.bad:hover{border-color:rgba(255,90,90,.5);background:rgba(255,90,90,.06)}
+  .card .nm{font-size:11.5px;font-weight:600;line-height:1.25;padding-right:52px}
+  .card .br{font-size:9px;color:var(--cyan);letter-spacing:.09em;text-transform:uppercase;margin-bottom:2px}
+  .card .pr{position:absolute;top:9px;right:10px;font-family:var(--mono);font-size:12px;font-weight:600}
+  .card .sp{margin-top:5px;display:flex;flex-wrap:wrap;gap:3px}
+  .tag{font-size:8.5px;padding:2px 5px;border-radius:3px;background:rgba(255,255,255,.06);
+    color:var(--dim);letter-spacing:.03em;font-family:var(--mono)}
+  .tag.hi{background:rgba(56,232,255,.15);color:var(--cyan)}
+  .card .warn{margin-top:5px;font-size:9.5px;color:var(--red);line-height:1.35}
+  .card .badge{position:absolute;bottom:8px;right:10px;font-size:8.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--lime);font-weight:700}
+
+  .empty{padding:22px 16px;text-align:center;color:var(--dim);font-size:11px;line-height:1.6}
+
+  /* build list */
+  .brow{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid rgba(120,160,200,.08);
+    font-size:11px;cursor:pointer;transition:.14s}
+  .brow:hover{background:rgba(255,255,255,.04)}
+  .brow .ic{width:19px;height:19px;border-radius:5px;display:grid;place-items:center;font-size:10px;
+    background:rgba(255,255,255,.05);color:var(--dim);flex:none;font-weight:700}
+  .brow.has .ic{background:rgba(139,255,106,.16);color:var(--lime)}
+  .brow.pend .ic{background:rgba(255,194,71,.16);color:var(--amber)}
+  .brow .tx{flex:1;min-width:0}
+  .brow .tx b{display:block;font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);font-weight:700}
+  .brow .tx span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px}
+  .brow .st{font-size:8.5px;color:var(--dim);letter-spacing:.06em;flex:none}
+  .brow.has .st{color:var(--lime)} .brow.pend .st{color:var(--amber)}
+
+  #issues{padding:9px 11px;border-top:1px solid var(--line);flex:none;max-height:34%;overflow-y:auto}
+  .iss{display:flex;gap:7px;font-size:10px;line-height:1.45;padding:5px 0;
+    border-bottom:1px solid rgba(120,160,200,.07)}
+  .iss:last-child{border:none}
+  .iss .k{flex:none;font-weight:800;font-size:11px;line-height:1.3}
+  .iss.err .k{color:var(--red)} .iss.wrn .k{color:var(--amber)} .iss.inf .k{color:var(--cyan)}
+  .iss.ok .k{color:var(--lime)}
+  .iss div{color:var(--dim)} .iss b{color:var(--txt);font-weight:600}
+
+  /* ---------- stage ---------- */
+  #stage{grid-area:stage;position:relative;z-index:5;pointer-events:none}
+  #stage > *{pointer-events:auto}
+
+  #tray{position:absolute;left:50%;transform:translateX(-50%);bottom:12px;display:flex;gap:7px;
+    padding:8px;border-radius:11px;background:var(--panel);border:1px solid var(--line);
+    backdrop-filter:blur(16px);max-width:94%;overflow-x:auto;align-items:center;
+    box-shadow:0 10px 34px rgba(0,0,0,.5)}
+  #tray.hidden{display:none}
+  .trayLbl{font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
+    writing-mode:vertical-rl;transform:rotate(180deg);padding:2px 0;font-weight:700;flex:none}
+  .titem{flex:none;width:82px;padding:7px 6px;border-radius:8px;border:1px solid var(--line);
+    background:rgba(255,255,255,.04);text-align:center;transition:.15s;cursor:pointer}
+  .titem:hover{border-color:var(--line-hot);background:rgba(56,232,255,.1);transform:translateY(-2px)}
+  .titem.held{border-color:var(--cyan);background:rgba(56,232,255,.18);
+    box-shadow:0 0 0 1px var(--cyan),0 0 20px rgba(56,232,255,.3)}
+  .titem.locked{opacity:.42;cursor:not-allowed}
+  .titem.locked:hover{transform:none;border-color:var(--line);background:rgba(255,255,255,.04)}
+  .titem .g{font-size:19px;line-height:1.1;margin-bottom:2px}
+  .titem .c{font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);font-weight:700}
+  .titem .n{font-size:8.5px;color:var(--txt);line-height:1.2;margin-top:2px;height:20px;overflow:hidden}
+
+  #hint{position:absolute;left:50%;transform:translateX(-50%);top:12px;padding:7px 15px;border-radius:20px;
+    background:rgba(10,15,22,.85);border:1px solid var(--line);font-size:11px;color:var(--dim);
+    backdrop-filter:blur(10px);white-space:nowrap;max-width:92%;overflow:hidden;text-overflow:ellipsis;
+    pointer-events:none}
+  #hint b{color:var(--cyan)}
+
+  #viewbtns{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:5px}
+  .vb{width:34px;height:30px;border-radius:7px;border:1px solid var(--line);background:rgba(10,15,22,.8);
+    font-size:9px;letter-spacing:.06em;color:var(--dim);backdrop-filter:blur(10px);transition:.15s;font-weight:700}
+  .vb:hover{color:var(--cyan);border-color:var(--line-hot)}
+  .vb.on{color:#04121a;background:var(--cyan);border-color:transparent}
+
+  #tip{position:absolute;pointer-events:none;padding:7px 10px;border-radius:7px;
+    background:rgba(6,10,16,.95);border:1px solid var(--line-hot);font-size:10.5px;max-width:230px;
+    line-height:1.45;opacity:0;transition:opacity .12s;z-index:30;box-shadow:0 6px 22px rgba(0,0,0,.6)}
+  #tip.on{opacity:1}
+  #tip b{color:var(--cyan);display:block;margin-bottom:2px;font-size:11px}
+  #tip i{color:var(--dim);font-style:normal;font-family:var(--mono);font-size:9.5px}
+
+  #toasts{position:absolute;left:50%;transform:translateX(-50%);top:52px;display:flex;
+    flex-direction:column;gap:6px;align-items:center;z-index:40;pointer-events:none}
+  .toast{padding:8px 15px;border-radius:8px;font-size:11.5px;font-weight:600;
+    background:rgba(10,15,22,.95);border:1px solid var(--line);backdrop-filter:blur(10px);
+    animation:pop .3s cubic-bezier(.2,1.4,.4,1);box-shadow:0 6px 22px rgba(0,0,0,.5);max-width:420px;
+    text-align:center;line-height:1.4}
+  .toast.err{border-color:rgba(255,90,90,.6);color:#ffb3b3;background:rgba(40,10,14,.95)}
+  .toast.ok{border-color:rgba(139,255,106,.55);color:#c8ffb8;background:rgba(14,32,10,.95)}
+  .toast.inf{border-color:var(--line-hot);color:#bfefff}
+  @keyframes pop{from{opacity:0;transform:translateY(-10px) scale(.94)}to{opacity:1;transform:none}}
+
+  /* ---------- modal ---------- */
+  #modal{position:fixed;inset:0;z-index:60;display:none;place-items:center;
+    background:rgba(3,6,10,.82);backdrop-filter:blur(7px);padding:20px}
+  #modal.on{display:grid}
+  .sheet{width:min(700px,100%);max-height:88vh;overflow-y:auto;border-radius:14px;
+    background:linear-gradient(160deg,#111823,#0a0e15);border:1px solid var(--line-hot);
+    box-shadow:0 26px 80px rgba(0,0,0,.75);animation:pop .32s cubic-bezier(.2,1.3,.4,1)}
+  .sheet .hd{padding:18px 22px 14px;border-bottom:1px solid var(--line);display:flex;
+    align-items:center;gap:14px}
+  .sheet .hd h1{font-size:19px;letter-spacing:.02em;font-weight:800}
+  .sheet .hd p{font-size:11px;color:var(--dim);margin-top:3px}
+  .grade{width:62px;height:62px;border-radius:14px;display:grid;place-items:center;font-size:29px;
+    font-weight:900;font-family:var(--mono);flex:none;border:2px solid currentColor}
+  .sheet .bd{padding:16px 22px 20px}
+  .sheet .ft{padding:12px 22px 18px;display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap}
+  .mets{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:9px;margin-bottom:15px}
+  .met{padding:10px 12px;border-radius:9px;background:rgba(255,255,255,.04);border:1px solid var(--line)}
+  .met b{display:block;font-family:var(--mono);font-size:21px;line-height:1.15}
+  .met span{font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim)}
+  .met i{font-style:normal;font-size:9.5px;color:var(--dim);display:block;margin-top:2px}
+  .bar{height:5px;border-radius:3px;background:rgba(255,255,255,.08);margin-top:7px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:3px;transition:width .8s cubic-bezier(.2,.8,.3,1)}
+  .sect{font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);
+    margin:14px 0 7px;font-weight:700}
+  .fpsrow{display:flex;align-items:center;gap:9px;padding:5px 0;font-size:11.5px}
+  .fpsrow .gm{width:130px;flex:none;color:var(--dim)}
+  .fpsrow .bar{flex:1;margin:0}
+  .fpsrow .vl{width:62px;text-align:right;font-family:var(--mono);flex:none;font-size:11px}
+  .notes{font-size:11px;line-height:1.6;color:var(--dim)}
+  .notes b{color:var(--txt)}
+  .notes li{margin-left:15px;margin-top:3px}
+
+  #boot{position:fixed;inset:0;z-index:70;display:none;background:#000;
+    font-family:var(--mono);font-size:12.5px;color:#c8ffc8;padding:34px;line-height:1.65;
+    white-space:pre-wrap;overflow:hidden}
+  #boot.on{display:block}
+  #boot .cur{animation:bl 1s steps(2) infinite}
+  @keyframes bl{50%{opacity:0}}
+
+  #loading{position:fixed;inset:0;z-index:90;display:grid;place-items:center;background:var(--bg);
+    transition:opacity .5s;font-size:11px;letter-spacing:.2em;color:var(--dim);text-transform:uppercase}
+  #loading.gone{opacity:0;pointer-events:none}
+
+  /* ---------- mode switch ---------- */
+  #modes{display:flex;gap:3px;padding:3px;border-radius:8px;background:rgba(255,255,255,.05);
+    border:1px solid var(--line)}
+  .modebtn{font-size:10.5px;font-weight:700;letter-spacing:.06em;padding:5px 11px;border-radius:6px;
+    color:var(--dim);transition:.16s;white-space:nowrap}
+  .modebtn:hover{color:var(--txt)}
+  .modebtn.on{background:linear-gradient(135deg,var(--cyan),#2aa8ff);color:#04121a}
+
+  /* ---------- repair shop panels ---------- */
+  #rshop,#rbench{display:none}
+  #rshop{grid-area:shop;border-right:1px solid var(--line)}
+  #rbench{grid-area:build;border-left:1px solid var(--line)}
+  #app.mode-repair #shop,#app.mode-repair #buildp,
+  #app.mode-repair .chip,#app.mode-repair #steps,#app.mode-repair #bPower,
+  #app.mode-repair #tray{display:none}
+  #app.mode-repair #rshop,#app.mode-repair #rbench{display:flex;flex-direction:column}
+
+  #rstats{display:flex;gap:6px;padding:9px 10px;border-bottom:1px solid var(--line);flex:none}
+  .stat{flex:1;padding:5px 8px;border-radius:7px;background:rgba(255,255,255,.04);
+    border:1px solid var(--line);text-align:center}
+  .stat b{display:block;font-family:var(--mono);font-size:14px;color:var(--lime)}
+  .stat span{font-size:8px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim)}
+
+  .job{margin:7px 9px;padding:9px 10px;border-radius:8px;border:1px solid var(--line);
+    background:rgba(255,255,255,.028);cursor:pointer;transition:.15s;position:relative}
+  .job:hover{border-color:var(--line-hot);background:rgba(56,232,255,.06)}
+  .job.active{border-color:var(--cyan);background:rgba(56,232,255,.11)}
+  .jhead{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+  .jhead b{font-size:11.5px}
+  .jhead .pr{font-family:var(--mono);font-size:12px;color:var(--lime)}
+  .jrush{font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-top:2px}
+  .jrush.rush{color:var(--amber)}
+  .jsay{font-size:10.5px;line-height:1.45;color:var(--txt);opacity:.82;margin-top:5px;font-style:italic}
+  .job .badge{position:static;display:inline-block;margin-top:5px;font-size:8px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--cyan);font-weight:700}
+
+  #rjob{padding:10px 12px;border-bottom:1px solid var(--line);flex:none}
+  #rmid{padding-bottom:8px}
+  .rsect{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);
+    font-weight:700;padding:11px 12px 5px}
+
+  #rtools{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:0 10px}
+  .tool{display:flex;align-items:center;gap:6px;padding:7px 8px;border-radius:7px;font-size:10px;
+    font-weight:600;border:1px solid var(--line);background:rgba(255,255,255,.04);
+    color:var(--txt);transition:.15s;text-align:left}
+  .tool:hover{border-color:var(--line-hot);background:rgba(56,232,255,.1)}
+  .tool.used{border-color:rgba(139,255,106,.35);color:var(--lime)}
+  .tool span{font-size:13px}
+
+  #rfindings{padding:8px 10px 0}
+  .finding{padding:7px 9px;margin-bottom:5px;border-radius:7px;font-size:10px;line-height:1.5;
+    background:rgba(56,232,255,.06);border:1px solid rgba(56,232,255,.2)}
+  /* only the tool name is a block; <b> inside the readout stays inline */
+  .flabel{display:block;color:var(--cyan);font-size:8.5px;letter-spacing:.13em;
+    text-transform:uppercase;margin-bottom:3px;font-weight:700}
+  .finding b{color:var(--txt);font-weight:700}
+  .empty.small{padding:10px;font-size:10px}
+
+  #rwork{padding:0 10px}
+  .wrow{padding:7px 0;border-bottom:1px solid rgba(120,160,200,.08)}
+  .whead{display:flex;justify-content:space-between;gap:6px;align-items:baseline}
+  .whead b{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  .whead span{font-size:10px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wacts{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+  .wbtn{font-size:9.5px;padding:4px 8px;border-radius:5px;border:1px solid var(--line);
+    background:rgba(255,255,255,.04);color:var(--txt);transition:.15s}
+  .wbtn:hover{border-color:var(--line-hot);background:rgba(56,232,255,.1)}
+  .wbtn i{font-style:normal;color:var(--amber);font-family:var(--mono)}
+  .wdone{margin-top:5px;font-size:9.5px;color:var(--lime);line-height:1.5}
+
+  #rfoot{padding:10px 12px;border-top:1px solid var(--line);flex:none}
+  .tally{font-size:10px;color:var(--dim);margin-bottom:7px}
+  .tally b{color:var(--txt);font-family:var(--mono)}
+  .btn.wide{width:100%;text-align:center}
+
+  #busy{position:fixed;inset:0;z-index:80;display:none;place-items:center;
+    background:rgba(4,7,11,.7);backdrop-filter:blur(4px);font-size:11px;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--dim)}
+  #busy.on{display:grid}
+
+  @media(max-width:1100px){
+    #app{grid-template-columns:250px 1fr 240px}
+  }
+  @media(max-width:820px){
+    #app{grid-template-columns:1fr;grid-template-rows:52px 1fr auto;
+      grid-template-areas:"top" "stage" "shop"}
+    #buildp{display:none}
+  }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div id="app">
+  <header id="topbar">
+    <div class="logo">RIGFORGE<small>PC BUILD SIM</small></div>
+    <div id="modes">
+      <button class="modebtn on" data-mode="build">Build</button>
+      <button class="modebtn" data-mode="repair">Repair Shop</button>
+    </div>
+    <div class="chip"><b id="mBudget">$0</b><span>Budget</span></div>
+    <div class="chip"><b id="mSpent">$0</b><span>Spent</span></div>
+    <div class="chip ok" id="cLeft"><b id="mLeft">$0</b><span>Left</span></div>
+    <div id="steps"></div>
+    <button class="btn ghost" id="bHelp">Help</button>
+    <button class="btn ghost" id="bReset">Reset</button>
+    <button class="btn primary" id="bPower" disabled>⏻ Power On</button>
+  </header>
+
+  <aside id="shop" class="panel">
+    <div class="phead"><h2>Parts Store</h2><span class="tag" id="shopCount"></span></div>
+    <div id="tabs"></div>
+    <div class="scroll" id="shopList"></div>
+  </aside>
+
+  <main id="stage">
+    <div id="hint">Loading…</div>
+    <div id="viewbtns">
+      <button class="vb" data-view="iso" title="Isometric">ISO</button>
+      <button class="vb" data-view="front" title="Front">FRT</button>
+      <button class="vb" data-view="mobo" title="Motherboard">MBD</button>
+      <button class="vb" data-view="top" title="Top">TOP</button>
+      <button class="vb" data-view="rear" title="Rear I/O">REA</button>
+      <button class="vb" id="bGlass" title="Toggle side panel">◫</button>
+      <button class="vb" id="bLights" title="Toggle RGB">✦</button>
+    </div>
+    <div id="tray"></div>
+    <div id="toasts"></div>
+    <div id="tip"></div>
+  </main>
+
+  <aside id="buildp" class="panel">
+    <div class="phead"><h2>Your Build</h2><span class="tag" id="wattTag">0 W</span></div>
+    <div class="scroll" id="buildList"></div>
+    <div id="issues"></div>
+  </aside>
+
+  <!-- ============ repair shop ============ -->
+  <aside id="rshop" class="panel">
+    <div class="phead"><h2>Job Queue</h2></div>
+    <div id="rstats"></div>
+    <div class="scroll" id="rqueue"></div>
+  </aside>
+
+  <aside id="rbench" class="panel">
+    <div class="phead"><h2>Work Order</h2></div>
+    <div id="rjob"></div>
+    <div class="scroll" id="rmid">
+      <div class="rsect">Diagnostics</div>
+      <div id="rtools"></div>
+      <div id="rfindings"></div>
+      <div class="rsect">Repairs</div>
+      <div id="rwork"></div>
+    </div>
+    <div id="rfoot"></div>
+  </aside>
+</div>
+
+<div id="busy"></div>
+
+<div id="modal"><div class="sheet" id="sheet"></div></div>
+<pre id="boot"></pre>
+<div id="loading">Initialising workshop…</div>
+
+<script type="importmap">
+{ "imports": { "three": "./three.module.min.js" } }
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
